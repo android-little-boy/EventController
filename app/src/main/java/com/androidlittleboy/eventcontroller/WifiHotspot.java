@@ -1,10 +1,13 @@
 package com.androidlittleboy.eventcontroller;
 
 import android.content.Context;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 import android.net.DhcpInfo;
 import android.net.wifi.WifiConfiguration;
 import android.net.wifi.WifiManager;
 import android.os.Handler;
+import android.os.HandlerThread;
 import android.os.Message;
 import android.text.format.Formatter;
 import android.util.Log;
@@ -18,6 +21,7 @@ import java.net.InetAddress;
 import java.net.NetworkInterface;
 import java.net.Socket;
 import java.net.SocketException;
+import java.nio.ByteBuffer;
 import java.util.Enumeration;
 
 public class WifiHotspot {
@@ -27,8 +31,10 @@ public class WifiHotspot {
     public static final int SEND_MSG_ERROR = 4;//发送消息失败
     public static final int GET_MSG = 6;//获取新消息
     private WifiManager wifiManager;
+    private final Handler workerHandler;
     private static final String TAG = "WifiHotspot";
     private Handler handler;
+    private Callback mCallback;
     private final Handler.Callback callback = new Handler.Callback() {
         @Override
         public boolean handleMessage(@NonNull Message msg) {
@@ -47,7 +53,15 @@ public class WifiHotspot {
                     Log.d(TAG, "发送消息失败:" + msg.getData().getString("MSG"));
                     break;
                 case GET_MSG:
-                    Log.d(TAG, "收到消息:" + msg.getData().getString("MSG"));
+                    byte[] b = msg.getData().getByteArray("data");
+//                    Log.d(TAG, "handleMessage: "+b.length);
+//                    ByteBuffer buf = ByteBuffer.wrap(b);
+//                    Bitmap mBitmap = Bitmap.createBitmap(width ,height, Bitmap.Config.ARGB_8888);
+//                    mBitmap.copyPixelsFromBuffer(buf);
+                    Bitmap mBitmap = BitmapFactory.decodeByteArray(b, 0, b.length);
+                    if (mCallback != null)
+                        mCallback.onPreview(mBitmap);
+                    Log.d(TAG, "收到消息:" + msg.getData().getInt("length"));
                     break;
             }
             return false;
@@ -55,6 +69,9 @@ public class WifiHotspot {
     };
 
     private WifiHotspot() {
+        HandlerThread handlerThread = new HandlerThread("worker");
+        handlerThread.start();
+        workerHandler = new Handler(handlerThread.getLooper());
     }
 
     public static WifiHotspot getWifiHotspot() {
@@ -62,8 +79,9 @@ public class WifiHotspot {
     }
 
     private static class WifiHotspotFactory {
-        static  WifiHotspot wifiHotspot = new WifiHotspot();
+        static WifiHotspot wifiHotspot = new WifiHotspot();
     }
+
     /**
      * 连接线程
      */
@@ -83,7 +101,8 @@ public class WifiHotspot {
      */
     private static final int PORT = 54321;
 
-    public void init(Context context) {
+    public void init(Context context, Callback mCallback) {
+        this.mCallback = mCallback;
         handler = new Handler(callback);
         wifiManager = (WifiManager) context.getApplicationContext().getSystemService(Context.WIFI_SERVICE);
         //检查Wifi状态
@@ -100,7 +119,6 @@ public class WifiHotspot {
                     connectThread.start();
                 } catch (IOException e) {
                     e.printStackTrace();
-
                     Log.e(TAG, "通信连接失败");
 
                 }
@@ -110,8 +128,26 @@ public class WifiHotspot {
 //        listenerThread = new ListenerThread(PORT, handler);
 //        listenerThread.start();
     }
+
+    public void unInit() {
+        connectThread.interrupt();
+        listenerThread.interrupt();
+        workerHandler.getLooper().quit();
+        connectThread = null;
+        listenerThread = null;
+        mCallback = null;
+    }
+
+
+    public void sendEvent(int type, int x, int y) {
+        if (connectThread != null) {
+            workerHandler.post(() -> connectThread.sendEvent(type, x, y));
+        }
+    }
+
     /**
      * wifi获取 已连接网络路由  路由ip地址
+     *
      * @param context
      * @return
      */
@@ -125,9 +161,13 @@ public class WifiHotspot {
         //DhcpInfo中的ipAddress是一个int型的变量，通过Formatter将其转化为字符串IP地址
         String routeIp = Formatter.formatIpAddress(dhcpInfo.gateway);
         Log.i("route ip", "wifi route ip：" + routeIp);
-        Log.d(TAG, "getWifiRouteIPAddress: "+routeIp);
+        Log.d(TAG, "getWifiRouteIPAddress: " + routeIp);
 
         return routeIp;
+    }
+
+    public interface Callback {
+        void onPreview(Bitmap bitmap);
     }
 
 }

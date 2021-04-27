@@ -1,10 +1,13 @@
 package com.androidlittleboy.eventcontroller;
+
 import android.content.Context;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Message;
 import android.util.Log;
 
+import java.io.DataInputStream;
+import java.io.DataOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -13,19 +16,18 @@ import java.text.DecimalFormat;
 
 /**
  * 连接线程
- * Created by syhuang on 2018/4/3
  */
 public class ConnectThread extends Thread {
     private static final String TAG = "ConnectThread";
-    private final Socket       socket;
-    private       Handler      handler;
-    private       InputStream  inputStream;
-    private       OutputStream outputStream;
+    private Socket socket;
+    private Handler handler;
+    private DataInputStream mmInStream;
+    private DataOutputStream mmOutStream;
 
     public ConnectThread(Socket socket, Handler handler) {
         setName("ConnectThread");
         Log.i("ConnectThread", "ConnectThread");
-        Log.d(TAG, "socket Ip: "+socket.getInetAddress());
+        Log.d(TAG, "socket Ip: " + socket.getInetAddress());
         this.socket = socket;
         this.handler = handler;
     }
@@ -39,156 +41,91 @@ public class ConnectThread extends Thread {
             return;
         }
         handler.sendEmptyMessage(WifiHotspot.DEVICE_CONNECTED);
+        int length;
         try {
             //获取数据流
-            inputStream = socket.getInputStream();
-            outputStream = socket.getOutputStream();
+            InputStream inputStream = socket.getInputStream();
+            OutputStream outputStream = socket.getOutputStream();
 
-            byte[] buffer = new byte[1024];
-            int bytes;
+            mmInStream = new DataInputStream(inputStream);
+            mmOutStream = new DataOutputStream(outputStream);
+
             while (true) {
 
-                //读取数据
-                bytes = inputStream.read(buffer);
-                if (bytes > 0) {
-                    final byte[] data = new byte[bytes];
-                    System.arraycopy(buffer, 0, data, 0, bytes);
-
-                    Message message = Message.obtain();
-                    message.what = WifiHotspot.GET_MSG;
-                    Bundle bundle = new Bundle();
-                    bundle.putString("MSG", new String(data));
-                    message.setData(bundle);
-                    handler.sendMessage(message);
+                if (isInterrupted()) {
+                    cancel();
+                    break;
                 }
-                //                DataInputStream dis = null;
-                //                FileOutputStream fos = null;
-                //                try {
-                //                    dis = new DataInputStream(inputStream);
-                //
-                //                    // 文件名和长度
-                //                    String fileName = dis.readUTF();
-                //                    if (!fileName.equals("")) {
-                //                        long fileLength = dis.readLong();
-                //                        Log.i("ConnectThread", "======== 文件接收 [File Name：" + fileName + "] " +
-                //                                "[Size：" + getFormatFileSize(fileLength) + "] ========");
-                //                        File directory = new File(Environment.getExternalStorageDirectory() + "/");
-                //                        if (!directory.exists()) {
-                //                            directory.mkdir();
-                //                        } else {
-                //                        }
-                //                        File file = new File(directory.getAbsolutePath() + File.separatorChar + fileName);
-                //                        fos = new FileOutputStream(file);
-                //
-                //                        // 开始接收文件
-                //                        byte[] bytesA = new byte[1024];
-                //                        int length = 0;
-                //                        int progress = 0;
-                //                        while ((length = dis.read(bytesA, 0, bytesA.length)) != -1) {
-                //                            Log.i("ConnectThread", length + "...");
-                //                            fos.write(bytesA, 0, length);
-                //                            fos.flush();
-                //                            progress += length;
-                //                            Log.i("ConnectThread", "| " + (100 * progress / file.length()) + "% |");
-                //                        }
-                //                        Log.i("ConnectThread", "文件传输完成");
-                //
-                //                        Message message = Message.obtain();
-                //                        message.what = MainActivity.GET_MSG;
-                //                        Bundle bundle = new Bundle();
-                //                        bundle.putString("MSG", new String("接收到文件：" + file.getAbsolutePath()));
-                //                        message.setData(bundle);
-                //                        handler.sendMessage(message);
-                //                    } else {
-                //                        //读取数据
-                //                        bytes = inputStream.read(buffer);
-                //                        if (bytes > 0) {
-                //                            final byte[] data = new byte[bytes];
-                //                            System.arraycopy(buffer, 0, data, 0, bytes);
-                //
-                //
-                //                            Message message = Message.obtain();
-                //                            message.what = MainActivity.GET_MSG;
-                //                            Bundle bundle = new Bundle();
-                //                            bundle.putString("MSG", new String(data));
-                //                            message.setData(bundle);
-                //                            handler.sendMessage(message);
-                //
-                //                            Log.i("ConnectThread", "读取到数据:" + new String(data));
-                //                        }
-                //                    }
 
-
+                //读取数据
+                length = mmInStream.readInt();
+                byte[] data = new byte[length];
+                int len = 0;
+                while (len < length) {
+                    len = len + mmInStream.read(data, len, length - len);
+                }
+                Message message = Message.obtain();
+                message.what = WifiHotspot.GET_MSG;
+                Bundle bundle = new Bundle();
+                bundle.putInt("length", length);
+                bundle.putByteArray("data", data);
+                message.setData(bundle);
+                handler.sendMessage(message);
             }
         } catch (IOException e) {
             e.printStackTrace();
         }
     }
 
-    /**
-     * 格式化文件大小
-     *
-     * @param length
-     * @return
-     */
-    private String getFormatFileSize(long length) {
-        DecimalFormat df = new DecimalFormat("#0.0");
-        double size = ((double) length) / (1 << 30);
-        if (size >= 1) {
-            return df.format(size) + "GB";
+    private void cancel() {
+        try {
+            socket.close();
+        } catch (IOException e) {
+            e.printStackTrace();
         }
-        size = ((double) length) / (1 << 20);
-        if (size >= 1) {
-            return df.format(size) + "MB";
-        }
-        size = ((double) length) / (1 << 10);
-        if (size >= 1) {
-            return df.format(size) + "KB";
-        }
-        return length + "B";
+        socket = null;
+        handler = null;
+        mmInStream = null;
+        mmOutStream = null;
     }
 
-    public static boolean copyFile(InputStream inputStream, OutputStream out) {
-        byte buf[] = new byte[1024];
-        int len;
+    void sendEvent(int type, int x, int y) {
+        String event = "" + type + ";" + x + ";" + y;
         try {
-            while ((len = inputStream.read(buf)) != -1) {
-                out.write(buf, 0, len);
-
-            }
-            out.close();
-            //            inputStream.close();
+            // type 蓝牙数据的类别 length：数据长度 buffer 数据
+            mmOutStream.writeInt(2);
+            mmOutStream.writeUTF(event);
+            // Share the sent message back to the UI Activity
+            Message message = Message.obtain();
+            message.what = WifiHotspot.SEND_MSG_SUCCSEE;
+            Bundle bundle = new Bundle();
+            bundle.putString("MSG", "type:2");
+            message.setData(bundle);
+            handler.sendMessage(message);
         } catch (IOException e) {
-
-            return false;
+            Log.e(TAG, "Exception during write:" + e.toString());
         }
-        return true;
     }
 
     /**
      * 发送数据
      */
-    public void sendData(String msg) {
-        Log.i("ConnectThread", "发送数据:" + (outputStream == null));
-        if (outputStream != null) {
-            try {
-                outputStream.write(msg.getBytes());
-                Log.i("ConnectThread", "发送消息：" + msg);
-                Message message = Message.obtain();
-                message.what = WifiHotspot.SEND_MSG_SUCCSEE;
-                Bundle bundle = new Bundle();
-                bundle.putString("MSG", new String(msg));
-                message.setData(bundle);
-                handler.sendMessage(message);
-            } catch (IOException e) {
-                e.printStackTrace();
-                Message message = Message.obtain();
-                message.what = WifiHotspot.SEND_MSG_ERROR;
-                Bundle bundle = new Bundle();
-                bundle.putString("MSG", new String(msg));
-                message.setData(bundle);
-                handler.sendMessage(message);
-            }
+    void write(byte[] buffer) {
+        try {
+            // type 蓝牙数据的类别 length：数据长度 buffer 数据
+            mmOutStream.writeInt(1);
+            mmOutStream.writeInt(buffer.length);
+            mmOutStream.write(buffer);
+
+            // Share the sent message back to the UI Activity
+            Message message = Message.obtain();
+            message.what = WifiHotspot.SEND_MSG_SUCCSEE;
+            Bundle bundle = new Bundle();
+            bundle.putString("MSG", "type：1");
+            message.setData(bundle);
+            handler.sendMessage(message);
+        } catch (IOException e) {
+            Log.e(TAG, "Exception during write:" + e.toString());
         }
     }
 
